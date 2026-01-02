@@ -1,5 +1,6 @@
 const { verifyPoW, verifySignature, createPublicKey } = require("../core/security");
 const { MAX_RELAY_HOPS } = require("../config/constants");
+const { BloomFilterManager } = require("../state/bloom");
 
 class MessageHandler {
     constructor(peerManager, diagnostics, relayCallback, broadcastCallback) {
@@ -7,6 +8,8 @@ class MessageHandler {
         this.diagnostics = diagnostics;
         this.relayCallback = relayCallback;
         this.broadcastCallback = broadcastCallback;
+        this.bloomFilter = new BloomFilterManager();
+        this.bloomFilter.start();
     }
 
     handleMessage(msg, sourceSocket) {
@@ -63,7 +66,9 @@ class MessageHandler {
                 this.broadcastCallback();
             }
 
-            if (hops < MAX_RELAY_HOPS) {
+            // Only relay if we haven't already relayed this message (bloom filter check)
+            if (hops < MAX_RELAY_HOPS && !this.bloomFilter.hasRelayed(id, seq)) {
+                this.bloomFilter.markRelayed(id, seq);
                 this.diagnostics.increment("heartbeatsRelayed");
                 this.relayCallback({ ...msg, hops: hops + 1 }, sourceSocket);
             }
@@ -90,7 +95,9 @@ class MessageHandler {
             this.peerManager.removePeer(id);
             this.broadcastCallback();
 
-            if (hops < MAX_RELAY_HOPS) {
+            // Use id:leave as key for LEAVE messages
+            if (hops < MAX_RELAY_HOPS && !this.bloomFilter.hasRelayed(id, "leave")) {
+                this.bloomFilter.markRelayed(id, "leave");
                 this.relayCallback({ ...msg, hops: hops + 1 }, sourceSocket);
             }
         }
