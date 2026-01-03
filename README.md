@@ -1,8 +1,7 @@
-<p align="center">
-  <img src="hypermind2.svg" width="150" alt="Hypermind Logo" />
-</p>
-
-# Hypermind
+<div align="center">
+<img src="hypermind2.svg" width="150" alt="Hypermind Logo" />
+<h1>Hypermind</h1>
+</div>
 
 ### The High-Availability Solution to a Problem That Doesn't Exist.
 
@@ -12,7 +11,7 @@ It solves the critical infrastructure challenge of knowing exactly how many othe
 
 ---
 
-## What is this?
+## » What is this?
 
 You have a server rack in your basement. You have 128GB of RAM. You have deployed the Arr stack, Home Assistant, Pi-hole, and a dashboard to monitor them all. **But you crave more.**
 
@@ -26,7 +25,7 @@ You need a service that:
 
 There is no central server. There is no database. There is only **The Swarm**.
 
-## How it works (The Over-Engineering)
+## » How it works
 
 We utilize the **Hyperswarm** DHT (Distributed Hash Table) to achieve a singular, trivial goal of **Counting.**
 
@@ -47,7 +46,7 @@ When your node starts, it uses a multi-phase bootstrap strategy to find peers. B
 **Phase 3: DHT Discovery** - The node joins the Hyperswarm DHT under the topic 'hypermind-lklynet-v1' and waits for peers. This always works eventually and is the default discovery mechanism for all nodes. It may take longer on initial startup without the optional IPv4 scan, but it is completely reliable.
 
 
-## Deployment
+## » Deployment
 
 ### Docker (The Fast Way)
 
@@ -65,8 +64,6 @@ docker run -d \
 
 > **⚠️ CRITICAL NETWORK NOTE:**
 > Use `--network host`. This is a P2P application that needs to punch through NATs. If you bridge it, the DHT usually fails, and you will be the loneliest node in the multiverse.
->
-> If you need to change the port (default 3000), update the `PORT` environment variable. Since `--network host` is used, this port will be opened directly on the host.
 
 ### Docker Compose (The Classy Way)
 
@@ -84,10 +81,57 @@ services:
 
 ```
 
-## Environment Variables
+### Kubernetes (The Enterprise Way)
+
+For when you need your useless counter to be orchestrated by a control plane.
+
+```bash
+kubectl create deployment hypermind --image=ghcr.io/lklynet/hypermind:latest --port=3000
+kubectl set env deployment/hypermind PORT=3000
+kubectl expose deployment hypermind --type=LoadBalancer --port=3000 --target-port=3000
+
+```
+
+## » Ecosystem & Integrations
+
+The community has bravely stepped up to integrate Hypermind into critical monitoring infrastructure.
+
+### Home Assistant
+
+Do you want your living room lights to turn red when the swarm grows? Of course you do.
+
+The [Hypermind HA Integration](https://github.com/synssins/hypermind-ha) (installable via HACS) provides:
+
+* **RGB Control:** 0 nodes = Green. 10,000 nodes = Red.
+* **Sensors:** Swarm health checks and statistics logging.
+* **WLED Support:** Visualize the swarm size on a literal LED strip.
+
+### Homepage Dashboard
+
+If it's not on your dashboard, does it even exist? You can query the `/api/stats` endpoint to add a widget to [gethomepage/homepage](https://gethomepage.dev/).
+
+Add this to your `services.yaml`:
+
+```yaml
+- Hypermind:
+    icon: /icons/hypermind2.png
+    href: http://<YOUR_IP>:3000
+    widget:
+      type: customapi
+      url: http://<YOUR_IP>:3000/api/stats
+      method: GET
+      mappings:
+        - field: count
+          label: Swarm Size
+        - field: direct
+          label: Friends
+
+```
+
+## » Environment Variables
 
 | Variable | Default | Description |
-|----------|---------|-------------|
+| --- | --- | --- |
 | `PORT` | `3000` | The port the web dashboard listens on. Since `--network host` is used, this port opens directly on the host. |
 | `MAX_PEERS` | `10000` | Maximum number of peers to track in the swarm. Unless you're expecting the entire internet to join, the default is probably fine. |
 | `ENABLE_IPV4_SCAN` | `false` | Enable IPv4 address space scanning for peer discovery. Disabled by default. Set to `true` to scan the entire IPv4 Network for Hypermind nodes. Most users should leave this disabled and rely on DHT discovery. |
@@ -98,7 +142,7 @@ services:
 | `PEER_CACHE_MAX_AGE` | `86400` | Maximum age in seconds for cached peers before they are considered stale and removed. Default is 24 hours. Only applies when cache is enabled. |
 | `BOOTSTRAP_PEER_IP` | (unset) | Debug mode: Set this to an IPv4 address to skip all bootstrap phases and connect directly to that peer. Useful for testing and scenarios where you know peer addresses in advance. |
 
-## Usage
+## » Usage
 
 Open your browser to: `http://localhost:3000`
 
@@ -109,7 +153,7 @@ The dashboard updates in **Realtime** via Server-Sent Events.
 * **Active Nodes:** The total number of people currently running this joke.
 * **Direct Connections:** The number of peers your node is actually holding hands with.
 
-## Local Development
+## » Local Development
 
 Want to contribute? Why? It already does nothing perfectly. But here is how anyway:
 
@@ -161,7 +205,7 @@ This connects directly to that peer, skipping all bootstrap phases. If the conne
 A: No. We respect your GPU too much.
 
 **Q: Does this store data?**
-A: No. It has the memory span of a goldfish (approx. 2.5 seconds).
+A: No. It has the short-term working memory of a honeybee (approx. 2.5 seconds). Which is biologically accurate and thematically consistent.
 
 **Q: Should I enable IPv4 scanning?**
 A: Probably not. DHT discovery works fine and doesn't require any special configuration. IPv4 scanning is there if you want extremely slow initial peer discovery or if you hate your IP's reputation, but it is not necessary for the network to function. Most deployments should just leave it disabled and let DHT do its thing.

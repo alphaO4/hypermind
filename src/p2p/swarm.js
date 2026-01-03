@@ -1,7 +1,7 @@
 const Hyperswarm = require("hyperswarm");
 const net = require("net");
 const { signMessage } = require("../core/security");
-const { TOPIC, TOPIC_NAME, HEARTBEAT_INTERVAL } = require("../config/constants");
+const { TOPIC, TOPIC_NAME, HEARTBEAT_INTERVAL, MAX_CONNECTIONS, CONNECTION_ROTATION_INTERVAL } = require("../config/constants");
 
 class SwarmManager {
     constructor(identity, peerManager, diagnostics, messageHandler, relayFn, broadcastFn) {
@@ -14,6 +14,7 @@ class SwarmManager {
 
         this.swarm = new Hyperswarm();
         this.heartbeatInterval = null;
+        this.rotationInterval = null;
     }
 
     /**
@@ -48,9 +49,17 @@ class SwarmManager {
         }
 
         this.startHeartbeat();
+        this.startRotation();
     }
 
     handleConnection(socket) {
+        if (this.swarm.connections.size > MAX_CONNECTIONS) {
+            socket.destroy();
+            return;
+        }
+
+        socket.connectedAt = Date.now();
+
         const sig = signMessage(`seq:${this.peerManager.getSeq()}`, this.identity.privateKey);
         const hello = JSON.stringify({
             type: "HEARTBEAT",
@@ -114,6 +123,23 @@ class SwarmManager {
         }, HEARTBEAT_INTERVAL);
     }
 
+    startRotation() {
+        this.rotationInterval = setInterval(() => {
+            if (this.swarm.connections.size < MAX_CONNECTIONS / 2) return;
+
+            let oldest = null;
+            for (const socket of this.swarm.connections) {
+                if (!oldest || socket.connectedAt < oldest.connectedAt) {
+                    oldest = socket;
+                }
+            }
+
+            if (oldest) {
+                oldest.destroy();
+            }
+        }, CONNECTION_ROTATION_INTERVAL);
+    }
+
     shutdown() {
         const sig = signMessage(`type:LEAVE:${this.identity.id}`, this.identity.privateKey);
         const goodbye = JSON.stringify({
@@ -129,6 +155,10 @@ class SwarmManager {
 
         if (this.heartbeatInterval) {
             clearInterval(this.heartbeatInterval);
+        }
+
+        if (this.rotationInterval) {
+            clearInterval(this.rotationInterval);
         }
 
         setTimeout(() => {
