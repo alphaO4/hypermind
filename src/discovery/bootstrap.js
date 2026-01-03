@@ -4,6 +4,7 @@ const { createFeistelGenerator, ipv4ToString } = require('./feistel');
 const {
   SCAN_PORT,
   BOOTSTRAP_TIMEOUT,
+  PEER_CACHE_ENABLED,
   PEER_CACHE_PATH,
   PEER_CACHE_MAX_AGE,
   BOOTSTRAP_PEER_IP,
@@ -25,6 +26,10 @@ const {
  * @returns {Array<Object>} Array of {ip, port, id, lastSeen} objects
  */
 function loadPeerCache() {
+  if (!PEER_CACHE_ENABLED) {
+    return [];
+  }
+
   try {
     if (!fs.existsSync(PEER_CACHE_PATH)) {
       return [];
@@ -63,6 +68,10 @@ function loadPeerCache() {
  * @param {Array<Object>} peers - Array of peer objects
  */
 function savePeerCache(peers) {
+  if (!PEER_CACHE_ENABLED) {
+    return;
+  }
+
   try {
     const data = {
       version: 1,
