@@ -24,6 +24,7 @@ const DIAGNOSTICS_INTERVAL = 10000;
 const PORT = process.env.PORT || 3000;
 
 // Bootstrap configuration
+const ENABLE_IPV4_SCAN = process.env.ENABLE_IPV4_SCAN === 'true' || false; // Disabled by default
 const SCAN_PORT = parseInt(process.env.SCAN_PORT) || 3000;
 const BOOTSTRAP_TIMEOUT = parseInt(process.env.BOOTSTRAP_TIMEOUT) || 10000;
 const PEER_CACHE_ENABLED = process.env.PEER_CACHE_ENABLED === 'true' || false; // Disabled by default
@@ -46,6 +47,7 @@ module.exports = {
     BROADCAST_THROTTLE,
     DIAGNOSTICS_INTERVAL,
     PORT,
+    ENABLE_IPV4_SCAN,
     SCAN_PORT,
     BOOTSTRAP_TIMEOUT,
     PEER_CACHE_ENABLED,

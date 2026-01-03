@@ -38,15 +38,13 @@ If you turn your container off, you vanish from the count. If everyone turns it 
 
 ### Peer Bootstrap Strategy
 
-When your node starts, it uses a three-phase bootstrap strategy to find peers faster than waiting for DHT discovery alone:
+When your node starts, it uses a multi-phase bootstrap strategy to find peers. By default, it skips directly to DHT discovery, which is simple and works everywhere. If you want faster initial discovery on your network, you can opt into IPv4 scanning.
 
-**Phase 1: Cached Peers** - If peer caching is enabled, on first run there are none, but after the node finds a peer, it saves that peer's address to a local cache file. On subsequent restarts, it attempts to reconnect to these known peers immediately. This makes restarts nearly instant if any cached peer is still online. Caching is disabled by default but can be enabled with the PEER_CACHE_ENABLED environment variable.
+**Phase 1: Cached Peers** - If peer caching is enabled, the node will first try to reconnect to peers it has seen before. On startup, if any of these cached peers are still online, connection happens instantly without waiting for discovery. This is only used if you explicitly enable PEER_CACHE_ENABLED. Cached peers older than 24 hours are automatically pruned as stale.
 
-**Phase 2: IPv4 Address Space Scan** - If cached peers are unavailable, the node performs a smart scan of the IPv4 address space looking for other Hypermind instances listening on the configured port. Rather than scanning sequentially (which would take weeks), it uses a Feistel cipher with a random seed to generate a deterministic but randomized enumeration of all 4 billion addresses. Each node gets a unique scan order, distributing the search load evenly across the network. This phase times out after a configurable duration (default 10 seconds) before falling back to DHT.
+**Phase 2: IPv4 Address Space Scan (Optional)** - If you enable ENABLE_IPV4_SCAN, the node will perform an intelligent scan of the IPv4 address space looking for other Hypermind nodes on your configured port. Instead of scanning sequentially (which would take forever), it uses a Feistel cipher to generate a randomized enumeration of addresses, with each node getting a unique scan order to distribute the search load evenly. This scan times out after a configurable duration before moving on. This feature is disabled by default and must be explicitly enabled if you want it.
 
-**Phase 3: DHT Fallback** - After the scan timeout, the node joins the Hyperswarm DHT and waits for peers to discover it or for it to discover peers through the DHT. This always works eventually, but may take a bit longer on first startup.
-
-When peer caching is enabled, peer information is stored in a versioned JSON cache file for long-term persistence across restarts, and cached peers older than 24 hours are automatically pruned to avoid stale entries.
+**Phase 3: DHT Discovery** - The node joins the Hyperswarm DHT under the topic 'hypermind-lklynet-v1' and waits for peers. This always works eventually and is the default discovery mechanism for all nodes. It may take longer on initial startup without the optional IPv4 scan, but it is completely reliable.
 
 
 ## Deployment
@@ -92,12 +90,13 @@ services:
 |----------|---------|-------------|
 | `PORT` | `3000` | The port the web dashboard listens on. Since `--network host` is used, this port opens directly on the host. |
 | `MAX_PEERS` | `10000` | Maximum number of peers to track in the swarm. Unless you're expecting the entire internet to join, the default is probably fine. |
-| `SCAN_PORT` | `3000` | The port to scan on remote IPv4 addresses when looking for bootstrap peers. This should match the port other nodes are listening on. |
-| `BOOTSTRAP_TIMEOUT` | `10000` | Time in milliseconds to spend scanning the IPv4 address space before giving up and using DHT discovery. Set to 0 to skip scanning entirely and go straight to DHT. |
+| `ENABLE_IPV4_SCAN` | `false` | Enable IPv4 address space scanning for peer discovery. Disabled by default. Set to `true` to scan the entire IPv4 Network for Hypermind nodes. Most users should leave this disabled and rely on DHT discovery. |
+| `SCAN_PORT` | `3000` | The port to scan on remote IPv4 addresses when IPv4 scanning is enabled. This should match the port other nodes are listening on. |
+| `BOOTSTRAP_TIMEOUT` | `10000` | Time in milliseconds to spend scanning the IPv4 address space before giving up and using DHT discovery. Only used if ENABLE_IPV4_SCAN is true. Set to 0 to skip scanning and go straight to DHT. |
 | `PEER_CACHE_ENABLED` | `false` | Enable or disable the peer cache feature. Set to `true` to cache discovered peers for faster reconnection on restart. Cache is disabled by default. |
 | `PEER_CACHE_PATH` | `./peers.json` | Path to the JSON file where discovered peers are cached (only used if PEER_CACHE_ENABLED is true). |
 | `PEER_CACHE_MAX_AGE` | `86400` | Maximum age in seconds for cached peers before they are considered stale and removed. Default is 24 hours. Only applies when cache is enabled. |
-| `BOOTSTRAP_PEER_IP` | (unset) | Debug mode: Set this to an IPv4 address to skip all bootstrap phases and connect directly to that peer. Useful for testing and docker-compose scenarios where you know peer addresses in advance. |
+| `BOOTSTRAP_PEER_IP` | (unset) | Debug mode: Set this to an IPv4 address to skip all bootstrap phases and connect directly to that peer. Useful for testing and scenarios where you know peer addresses in advance. |
 
 ## Usage
 
@@ -163,6 +162,9 @@ A: No. We respect your GPU too much.
 
 **Q: Does this store data?**
 A: No. It has the memory span of a goldfish (approx. 2.5 seconds).
+
+**Q: Should I enable IPv4 scanning?**
+A: Probably not. DHT discovery works fine and doesn't require any special configuration. IPv4 scanning is there if you want extremely slow initial peer discovery or if you hate your IP's reputation, but it is not necessary for the network to function. Most deployments should just leave it disabled and let DHT do its thing.
 
 **Q: Why did you make this?**
 A: The homelab must grow. ¯\\_(ツ)_/¯

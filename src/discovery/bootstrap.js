@@ -3,6 +3,7 @@ const net = require('net');
 const { createFeistelGenerator, ipv4ToString } = require('./feistel');
 const { signMessage, verifyPoW, verifySignature, createPublicKey } = require('../core/security');
 const {
+  ENABLE_IPV4_SCAN,
   SCAN_PORT,
   BOOTSTRAP_TIMEOUT,
   PEER_CACHE_ENABLED,
@@ -459,22 +460,24 @@ async function bootstrapPeers(seed, identity) {
     return cachedPeer;
   }
 
-  // Phase 2: Scan IPv4 space
-  const scannedPeer = await scanIPv4Space(seed, BOOTSTRAP_TIMEOUT, identity);
-  if (scannedPeer) {
-    // Save successful peer to cache for next time
-    const peer = {
-      ...scannedPeer,
-      id: null, // Will be populated after successful handshake
-      lastSeen: Date.now(),
-    };
-    savePeerCache([peer]);
-    console.log(`[bootstrap] Bootstrap complete: found peer via IPv4 scan`);
-    return peer;
+  // Phase 2: Scan IPv4 space (optional, disabled by default)
+  if (ENABLE_IPV4_SCAN) {
+    const scannedPeer = await scanIPv4Space(seed, BOOTSTRAP_TIMEOUT, identity);
+    if (scannedPeer) {
+      // Save successful peer to cache for next time
+      const peer = {
+        ...scannedPeer,
+        id: null, // Will be populated after successful handshake
+        lastSeen: Date.now(),
+      };
+      savePeerCache([peer]);
+      console.log(`[bootstrap] Bootstrap complete: found peer via IPv4 scan`);
+      return peer;
+    }
   }
 
   // Phase 3: Fall back to DHT (Hyperswarm handles this automatically)
-  console.log(`[bootstrap] No peers found via scan, falling back to DHT discovery`);
+  console.log(`[bootstrap] No peers found via cache${ENABLE_IPV4_SCAN ? ' or scan' : ''}, falling back to DHT discovery`);
   return null;
 }
 
