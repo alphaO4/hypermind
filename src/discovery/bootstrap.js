@@ -8,6 +8,9 @@ const {
   PEER_CACHE_PATH,
   PEER_CACHE_MAX_AGE,
   BOOTSTRAP_PEER_IP,
+  MAX_SCAN_ATTEMPTS,
+  SCAN_CONCURRENCY,
+  SCAN_CONNECTION_TIMEOUT,
 } = require('../config/constants');
 
 /**
@@ -141,8 +144,8 @@ async function retryCachedPeers() {
 }
 
 /**
- * Scan IPv4 address space via Feistel-permuted addresses.
- * Attempts TCP connection to each address on SCAN_PORT until first success.
+ * Scan IPv4 address space via Feistel-permuted addresses with concurrent connections.
+ * Attempts TCP connections to multiple addresses in parallel until first success.
  * 
  * @param {number} seed - Seed for Feistel permutation
  * @param {number} timeout - Overall timeout for scan (milliseconds)
@@ -152,53 +155,118 @@ async function scanIPv4Space(seed, timeout) {
   const generator = createFeistelGenerator(seed);
   const startTime = Date.now();
   let attempts = 0;
-  const maxAttempts = 100000; // Limit to prevent infinite loops in testing
+  let found = false;
+  let result = null;
 
   console.log(
-    `[bootstrap] Starting IPv4 scan on port ${SCAN_PORT} with ${timeout}ms timeout...`
+    `[bootstrap] Starting IPv4 scan on port ${SCAN_PORT} with ${timeout}ms timeout (${SCAN_CONCURRENCY} concurrent)...`
   );
 
-  while (attempts < maxAttempts) {
-    if (Date.now() - startTime > timeout) {
-      console.log(
-        `[bootstrap] IPv4 scan timeout after ${attempts} attempts (${(
-          (attempts / 0x100000000) *
-          100
-        ).toFixed(4)}% coverage)`
-      );
-      return null;
+  const pendingPromises = new Map();
+  const pendingSockets = new Map();
+  let lastProgressLog = Date.now();
+
+  const cleanupAllConnections = () => {
+    for (const [, socket] of pendingSockets) {
+      if (socket) {
+        socket.destroy();
+      }
+    }
+    pendingSockets.clear();
+  };
+
+  while (Date.now() - startTime < timeout && !found) {
+    // Remove completed promises
+    for (const [key, promise] of pendingPromises) {
+      if (promise.settled) {
+        pendingPromises.delete(key);
+        pendingSockets.delete(key);
+      }
     }
 
-    const { value: address } = generator.next();
-    const ip = ipv4ToString(address);
+    // Spawn new connection attempts up to concurrency limit
+    while (pendingPromises.size < SCAN_CONCURRENCY && Date.now() - startTime < timeout && !found) {
+      let address = generator.next().value;
+      let ip = ipv4ToString(address);
 
-    // Skip loopback, private, and multicast ranges for production scan
-    // For testing/local dev, you might want to enable these
-    if (shouldSkipAddress(ip)) {
+      while (shouldSkipAddress(ip)) {
+        address = generator.next().value;
+        ip = ipv4ToString(address);
+      }
+
       attempts++;
-      continue;
+      const key = `${ip}:${attempts}`;
+
+      const promise = tryConnectToPeer(ip, SCAN_PORT, SCAN_CONNECTION_TIMEOUT).then((socket) => {
+        promise.settled = true;
+        if (socket) {
+          pendingSockets.set(key, null);
+          socket.destroy();
+          console.log(
+            `[bootstrap] Found peer at ${ip}:${SCAN_PORT} after ${attempts} attempts`
+          );
+          found = true;
+          cleanupAllConnections();
+          return { ip, port: SCAN_PORT };
+        }
+        pendingSockets.delete(key);
+        return null;
+      }).catch(() => {
+        promise.settled = true;
+        pendingSockets.delete(key);
+        return null;
+      });
+
+      promise.settled = false;
+      pendingPromises.set(key, promise);
+      pendingSockets.set(key, true);
     }
 
-    attempts++;
-
-    // Only attempt every Nth address to avoid overwhelming the network
-    if (attempts % 100 !== 0) continue;
-
-    const socket = await tryConnectToPeer(ip, SCAN_PORT, 500);
-
-    if (socket) {
-      socket.destroy();
-      console.log(`[bootstrap] Found peer at ${ip}:${SCAN_PORT} after ${attempts} attempts`);
-      return { ip, port: SCAN_PORT };
-    }
-
-    // Log progress every 10k addresses
-    if (attempts % 10000 === 0) {
+    // Log progress periodically
+    const now = Date.now();
+    if (now - lastProgressLog >= 5000) {
       const progress = (attempts / 0x100000000) * 100;
-      const elapsed = (Date.now() - startTime) / 1000;
-      console.log(`[bootstrap] Scan progress: ${progress.toFixed(4)}% (${elapsed.toFixed(1)}s)`);
+      const elapsed = (now - startTime) / 1000;
+      const rate = (attempts / elapsed).toFixed(0);
+      console.log(
+        `[bootstrap] Scan progress: ${progress.toFixed(4)}% (${elapsed.toFixed(1)}s, ${rate} addr/s)`
+      );
+      lastProgressLog = now;
+    }
+
+    // Check if any promise found a peer and capture result
+    for (const promise of pendingPromises.values()) {
+      if (promise.settled && promise.resolved) {
+        result = promise.resolved;
+        found = true;
+        break;
+      }
+    }
+
+    if (found && result) {
+      return result;
+    }
+
+    // Yield to event loop
+    await new Promise(resolve => setImmediate(resolve));
+  }
+
+  // Wait for any remaining pending promises
+  const results = await Promise.allSettled(Array.from(pendingPromises.values()));
+  cleanupAllConnections();
+
+  for (const promiseResult of results) {
+    if (promiseResult.status === 'fulfilled' && promiseResult.value) {
+      return promiseResult.value;
     }
   }
+
+  console.log(
+    `[bootstrap] IPv4 scan timeout after ${attempts} attempts (${(
+      (attempts / 0x100000000) *
+      100
+    ).toFixed(4)}% coverage)`
+  );
 
   return null;
 }
