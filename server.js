@@ -49,7 +49,7 @@ const main = async () => {
   // Use entropy from crypto for deterministic per-node Feistel seed
   const bootstrapSeed = crypto.randomBytes(8).readBigUInt64BE();
   console.log(`[main] Bootstrap seed: ${bootstrapSeed.toString(16)}`);
-  const bootstrapPeer = await bootstrapPeers(Number(bootstrapSeed));
+  const bootstrapPeer = await bootstrapPeers(Number(bootstrapSeed), identity);
 
   await swarmManager.start(bootstrapPeer);
 

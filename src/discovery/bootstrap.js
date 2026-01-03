@@ -1,6 +1,7 @@
 const fs = require('fs');
 const net = require('net');
 const { createFeistelGenerator, ipv4ToString } = require('./feistel');
+const { signMessage, verifyPoW, verifySignature, createPublicKey } = require('../core/security');
 const {
   SCAN_PORT,
   BOOTSTRAP_TIMEOUT,
@@ -12,6 +13,7 @@ const {
   SCAN_CONCURRENCY,
   SCAN_CONNECTION_TIMEOUT,
 } = require('../config/constants');
+const { validateMessage } = require('../p2p/messaging');
 
 /**
  * Bootstrap coordinator for Hypermind peer discovery.
@@ -115,6 +117,123 @@ async function tryConnectToPeer(ip, port, timeout = 500) {
 }
 
 /**
+ * Validate peer is running Hypermind by exchanging heartbeats.
+ * Sends our heartbeat and waits for peer response, validates PoW and signature.
+ * 
+ * @param {string} ip - IPv4 address
+ * @param {number} port - Port number
+ * @param {number} timeout - Timeout in milliseconds
+ * @param {Object} identity - Our identity {id, privateKey, nonce}
+ * @returns {Promise<boolean>} true if valid Hypermind peer, false otherwise
+ */
+async function validatePeerConnection(ip, port, timeout, identity) {
+  return new Promise((resolve) => {
+    const socket = net.createConnection(port, ip, () => {
+      const sig = signMessage(`seq:0`, identity.privateKey);
+      const heartbeat = JSON.stringify({
+        type: "HEARTBEAT",
+        id: identity.id,
+        seq: 0,
+        hops: 0,
+        nonce: identity.nonce,
+        sig,
+      }) + "\n";
+
+      socket.write(heartbeat);
+
+      let dataBuffer = '';
+      const responseTimeout = setTimeout(() => {
+        socket.destroy();
+        resolve(false);
+      }, timeout);
+
+      socket.on('data', (data) => {
+        dataBuffer += data.toString();
+        const lines = dataBuffer.split('\n');
+
+        for (let i = 0; i < lines.length - 1; i++) {
+          const line = lines[i].trim();
+          if (!line) continue;
+
+          try {
+            const msg = JSON.parse(line);
+
+            if (!validateMessage(msg)) {
+              clearTimeout(responseTimeout);
+              socket.destroy();
+              resolve(false);
+              return;
+            }
+
+            if (msg.type !== 'HEARTBEAT') continue;
+
+            if (!verifyPoW(msg.id, msg.nonce)) {
+              clearTimeout(responseTimeout);
+              socket.destroy();
+              resolve(false);
+              return;
+            }
+
+            if (!msg.sig) {
+              clearTimeout(responseTimeout);
+              socket.destroy();
+              resolve(false);
+              return;
+            }
+
+            try {
+              const key = createPublicKey(msg.id);
+              if (!verifySignature(`seq:${msg.seq}`, msg.sig, key)) {
+                clearTimeout(responseTimeout);
+                socket.destroy();
+                resolve(false);
+                return;
+              }
+
+              clearTimeout(responseTimeout);
+              socket.destroy();
+              resolve(true);
+              return;
+            } catch (e) {
+              clearTimeout(responseTimeout);
+              socket.destroy();
+              resolve(false);
+              return;
+            }
+          } catch (e) {
+            continue;
+          }
+        }
+
+        dataBuffer = lines[lines.length - 1];
+      });
+
+      socket.setTimeout(timeout);
+      socket.on('timeout', () => {
+        clearTimeout(responseTimeout);
+        socket.destroy();
+        resolve(false);
+      });
+
+      socket.on('error', () => {
+        clearTimeout(responseTimeout);
+        socket.destroy();
+        resolve(false);
+      });
+
+      socket.on('close', () => {
+        clearTimeout(responseTimeout);
+      });
+    });
+
+    socket.setTimeout(timeout);
+    socket.on('error', () => {
+      resolve(false);
+    });
+  });
+}
+
+/**
  * Retry cached peers from previous runs.
  * @returns {Promise<{ip: string, port: number, id: string}|null>} Connected peer or null
  */
@@ -149,9 +268,10 @@ async function retryCachedPeers() {
  * 
  * @param {number} seed - Seed for Feistel permutation
  * @param {number} timeout - Overall timeout for scan (milliseconds)
+ * @param {Object} identity - Our identity {id, privateKey, nonce}
  * @returns {Promise<{ip: string, port: number}|null>} First peer found or null
  */
-async function scanIPv4Space(seed, timeout) {
+async function scanIPv4Space(seed, timeout, identity) {
   const generator = createFeistelGenerator(seed);
   const startTime = Date.now();
   let attempts = 0;
@@ -197,13 +317,20 @@ async function scanIPv4Space(seed, timeout) {
       attempts++;
       const key = `${ip}:${attempts}`;
 
-      const promise = tryConnectToPeer(ip, SCAN_PORT, SCAN_CONNECTION_TIMEOUT).then((socket) => {
+      const promise = tryConnectToPeer(ip, SCAN_PORT, SCAN_CONNECTION_TIMEOUT).then(async (socket) => {
         promise.settled = true;
         if (socket) {
-          pendingSockets.set(key, null);
+          pendingSockets.set(key, socket);
           socket.destroy();
+          
+          const isValid = await validatePeerConnection(ip, SCAN_PORT, 1000, identity);
+          if (!isValid) {
+            pendingSockets.delete(key);
+            return null;
+          }
+          
           console.log(
-            `[bootstrap] Found peer at ${ip}:${SCAN_PORT} after ${attempts} attempts`
+            `[bootstrap] Found valid Hypermind peer at ${ip}:${SCAN_PORT} after ${attempts} attempts`
           );
           found = true;
           cleanupAllConnections();
@@ -308,17 +435,17 @@ function shouldSkipAddress(ip) {
  * before swarm.start(). It returns immediately (non-blocking) but logs progress.
  * 
  * @param {number} seed - Random seed for Feistel permutation (e.g., process entropy)
+ * @param {Object} identity - Our identity {id, privateKey, nonce}
  * @returns {Promise<void>}
  */
-async function bootstrapPeers(seed) {
+async function bootstrapPeers(seed, identity) {
   console.log(`[bootstrap] Starting peer bootstrap with seed: ${seed.toString(16)}`);
 
   // Debug phase: Direct peer IP (skip cache and scan)
   if (BOOTSTRAP_PEER_IP) {
     console.log(`[bootstrap] DEBUG MODE: Attempting direct connection to ${BOOTSTRAP_PEER_IP}:${SCAN_PORT}`);
-    const socket = await tryConnectToPeer(BOOTSTRAP_PEER_IP, SCAN_PORT, 2000);
-    if (socket) {
-      socket.destroy();
+    const isValid = await validatePeerConnection(BOOTSTRAP_PEER_IP, SCAN_PORT, 2000, identity);
+    if (isValid) {
       console.log(`[bootstrap] Bootstrap complete: connected to debug peer ${BOOTSTRAP_PEER_IP}`);
       return { ip: BOOTSTRAP_PEER_IP, port: SCAN_PORT };
     }
@@ -333,7 +460,7 @@ async function bootstrapPeers(seed) {
   }
 
   // Phase 2: Scan IPv4 space
-  const scannedPeer = await scanIPv4Space(seed, BOOTSTRAP_TIMEOUT);
+  const scannedPeer = await scanIPv4Space(seed, BOOTSTRAP_TIMEOUT, identity);
   if (scannedPeer) {
     // Save successful peer to cache for next time
     const peer = {
